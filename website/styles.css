@@ -166,6 +166,7 @@ button.help-button {
   h2 {
     font-size: 18px;
   }
+}
 
 /* Smoothing control styling  */
 .smoothing-control {
@@ -264,5 +265,4 @@ button.help-button {
 #velocitySmoothing:hover,
 #velocitySmoothing:focus {
     background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3e%3cpolygon points='0,0 12,0 6,12' fill='%23ffffff'/%3e%3c/svg%3e");
-}
 }

@@ -39,3 +39,22 @@
   document.getElementById("button-rotary-serial").addEventListener("click", async () => {
     readSerial(rotarySerialElement, logSerialElement, "Rotary Angle (radians)", "angle", 115200);
   });
+
+    /**
+   * Event listener for rotary BLE button
+   * @async
+   */
+  document.getElementById("button-rotary-BLE").addEventListener("click", async () => {
+    try {
+      await connectBLE(
+        ROTARY_SERVICE_UUID,
+        ROTARY_CHARACTERISTIC_UUID,
+        rotaryBLEElement,
+        "Rotary Angle (radians)",
+        "angle",
+        logSerialElement
+      );
+    } catch (err) {
+      console.error("Rotary BLE connection failed:", err);
+    }
+  });

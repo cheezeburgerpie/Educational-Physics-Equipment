@@ -9,21 +9,55 @@
 #define PIN_A 25
 #define PIN_B 26
 
+// Counts per full revolution assuming 4x quadrature decoding
+#define COUNTS_PER_REV 2400.0f
+
 // BLE UUIDs
 #define SERVICE_UUID            "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define NOTIFY_CHARACTERISTIC   "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define COMMAND_CHARACTERISTIC  "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 // encoder globals
-long encoderCount = 0;
-long encoderOffset = 0; // for reset 
-uint8_t old_AB = 0;
-static const int8_t enc_delta[] = {
+// encoderCount and old_AB are written by the ISR and read from loop() and the
+// BLE task so they must be volatile 
+volatile long encoderCount = 0;
+volatile uint8_t old_AB = 0;
+
+long encoderOffset = 0; // for reset; only touched outside the ISR
+
+// Spinlock protecting encoderCount / old_AB.
+portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
+
+// DRAM_ATTR keeps this table in RAM instead of flash
+static const DRAM_ATTR int8_t enc_delta[] = {
   0, -1, 1, 0,
   1, 0, 0, -1,
  -1, 0, 0, 1,
   0, 1, -1, 0
 };
+
+/**
+ * Interrupt handler. Runs on every edge of either encoder pin
+ */
+void IRAM_ATTR encoderISR() {
+  uint8_t current_AB = (digitalRead(PIN_A) << 1) | digitalRead(PIN_B);
+
+  portENTER_CRITICAL_ISR(&encoderMux);
+  if (current_AB != old_AB) {
+    uint8_t index = ((old_AB << 2) | current_AB) & 0x0F;
+    encoderCount += enc_delta[index];
+    old_AB = current_AB;
+  }
+  portEXIT_CRITICAL_ISR(&encoderMux);
+}
+
+long readEncoderCount() {
+  long c;
+  portENTER_CRITICAL(&encoderMux);
+  c = encoderCount;
+  portEXIT_CRITICAL(&encoderMux);
+  return c;
+}
 
 // start and stop boolean 
 bool streamingEnabled = false;
@@ -62,7 +96,7 @@ class CommandCallback : public BLECharacteristicCallbacks {
     value.trim();
 
     if (value == "RESET") {
-      encoderOffset = encoderCount;
+      encoderOffset = readEncoderCount();
       Serial.println("Received RESET command from web");
     } 
     else if (value == "START") {
@@ -138,44 +172,47 @@ void setup() {
 
   pinMode(PIN_A, INPUT_PULLUP);
   pinMode(PIN_B, INPUT_PULLUP);
+
+  // Seed the state machine with the current pin state before interrupts start
   old_AB = (digitalRead(PIN_A) << 1) | digitalRead(PIN_B);
+
+  // Both pins, both edges
+  attachInterrupt(digitalPinToInterrupt(PIN_A), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_B), encoderISR, CHANGE);
+  Serial.println("Encoder interrupts attached");
 
   // initialize timing 
   lastMicros = micros();
-  lastCountForVel = encoderCount;
+  lastCountForVel = readEncoderCount();
 }
 
 void loop() {
-  // encoder decoding
-  uint8_t current_AB = (digitalRead(PIN_A) << 1) | digitalRead(PIN_B);
-  if (current_AB != old_AB) {
-    old_AB <<= 2;
-    old_AB |= current_AB;
-    encoderCount += enc_delta[old_AB & 0x0F];
-    old_AB = current_AB;
-  }
 
   // produce and send JSON when streaming enabled
   static unsigned long lastNotifyMs = 0;
   if (streamingEnabled && (millis() - lastNotifyMs) >= 50) { // 20 Hz
     lastNotifyMs = millis();
 
+    // One snapshot per sample used for all three values below so
+    // they stay consistent with each other even if the ISR fires mid sample
+    long count = readEncoderCount();
+
     // compute angle in radians
-    long adjustedCount = encoderCount - encoderOffset;
-    float angle = (float)adjustedCount * (2.0 * M_PI / 2400.0f); // radians
+    long adjustedCount = count - encoderOffset;
+    float angle = (float)adjustedCount * (2.0f * M_PI / COUNTS_PER_REV); // radians
 
     // compute angular velocity (rad/s) using micros() delta
     unsigned long nowMicros = micros();
     unsigned long dtMicros = nowMicros - lastMicros;
     float angularVelocity = 0.0f;
     if (dtMicros > 0) {
-      long dCount = encoderCount - lastCountForVel;
-      float dAngle = (float)dCount * (2.0 * M_PI / 2400.0f);
+      long dCount = count - lastCountForVel;
+      float dAngle = (float)dCount * (2.0f * M_PI / COUNTS_PER_REV);
       angularVelocity = dAngle / (dtMicros / 1000000.0f); // rads/s
     }
     // update baselines for next calc
     lastMicros = nowMicros;
-    lastCountForVel = encoderCount;
+    lastCountForVel = count;
 
     // create JSON string
     // include angle, angularVelocity (rad/s), count

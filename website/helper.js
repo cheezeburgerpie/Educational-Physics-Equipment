@@ -184,3 +184,4 @@ export async function sendCommand(cmd) {
         throw err;
     }
 }
+window.sendCommand = sendCommand;

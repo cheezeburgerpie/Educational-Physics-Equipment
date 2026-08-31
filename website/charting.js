@@ -262,7 +262,9 @@ document.addEventListener("DOMContentLoaded", () => {
         startTime = null;
         lastGoodPosition = 0;
         isStreaming = false;
+        
 
+        // Forgot what this is
         calculationResultAngleDiv.textContent = '';
         calculationResultVelocityDiv.textContent = '';
 
