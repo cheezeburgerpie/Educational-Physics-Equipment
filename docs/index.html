@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Educational Physics Equipment</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        // Applied before first paint so the page doesn't flash light then dark.
+        (function () {
+            var saved = localStorage.getItem('theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        })();
+    </script>
+    <style>
+        .landing { max-width: 720px; margin: 0 auto; text-align: left; }
+        .landing p { line-height: 1.6; }
+        .landing ul { line-height: 1.8; padding-left: 20px; }
+        .landing .actions { text-align: center; margin: 28px 0; }
+        .landing .primary { font-size: 16px; padding: 14px 28px; }
+        #support { display: block; margin: 20px auto; max-width: 620px; }
+        .ok { color: #2c7; font-weight: 500; }
+        .bad { color: #c44; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Educational Physics Equipment</h1>
+
+        <div class="controls">
+            <button id="toggleDarkModeButton">Switch to Dark Mode</button>
+        </div>
+
+        <div class="landing">
+            <p>
+                A browser interface for custom-built physics sensors. Connect a rotary
+                encoder or an ultrasonic rangefinder over Bluetooth to record live
+                data.
+            </p>
+
+            <div class="actions">
+                <button class="primary" onclick="location.href='device-comms.html'">Open the sensor app</button>
+                <button onclick="location.href='help.html'">Help &amp; setup guide</button>
+            </div>
+
+            <div class="status" id="support">Checking browser support&hellip;</div>
+
+            <h2>Before you start</h2>
+            <ul>
+                <li>Use Chrome or any Chromium-based browser. Firefox and
+                    Safari do not have Web Serial or Web Bluetooth.</li>
+                <li>On Linux Web Bluetooth needs
+                    <code>chrome://flags/#enable-experimental-web-platform-features</code>
+                    turned on.</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Dark mode toggle, matching the behaviour in device-comms.js.
+        (function () {
+            var btn = document.getElementById('toggleDarkModeButton');
+            var html = document.documentElement;
+            function label() {
+                btn.textContent = html.getAttribute('data-theme') === 'dark'
+                    ? 'Switch to Light Mode' : 'Switch to Dark Mode';
+            }
+            label();
+            btn.addEventListener('click', function () {
+                var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+                html.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                label();
+            });
+        })();
+
+        // Explaining to people why nothing will connect
+        (function () {
+            var el = document.getElementById('support');
+            var hasSerial = 'serial' in navigator;
+            var hasBluetooth = 'bluetooth' in navigator;
+            var secure = window.isSecureContext;
+
+            if (hasSerial && hasBluetooth && secure) {
+                el.innerHTML = '<span class="ok">Your browser supports both USB and Bluetooth connections.</span>';
+                return;
+            }
+
+            var missing = [];
+            if (!secure) missing.push('this page is not in a secure context (needs HTTPS or localhost)');
+            if (!hasSerial) missing.push('Web Serial is unavailable so USB will not work');
+            if (!hasBluetooth) missing.push('Web Bluetooth is unavailable so Bluetooth will not work');
+
+            el.innerHTML = '<span class="bad">Limited support:</span> ' + missing.join('; ') +
+                '. Try Chrome or Edge over HTTPS.';
+        })();
+    </script>
+</body>
+</html>
