@@ -4,7 +4,6 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <math.h>
-#include <esp_gap_ble_api.h>
 
 #define PIN_A 25
 #define PIN_B 26
@@ -71,17 +70,48 @@ BLEServer* pServer = nullptr;
 BLECharacteristic* pNotifyCharacteristic = nullptr;
 BLECharacteristic* pCommandCharacteristic = nullptr;
 
+/**
+ * Handles START / STOP / RESET. Shared by the BLE command characteristic and
+ * the USB serial port so both should behave identically
+ */
+void handleCommand(String cmd) {
+  cmd.trim();
+
+  if (cmd == "RESET") {
+    long now = readEncoderCount();
+    encoderOffset = now;
+    lastCountForVel = now;
+    lastMicros = micros();
+    Serial.println("# RESET");
+  }
+  else if (cmd == "START") {
+    lastCountForVel = readEncoderCount();
+    lastMicros = micros();
+    streamingEnabled = true;
+    Serial.println("# START");
+  }
+  else if (cmd == "STOP") {
+    streamingEnabled = false;
+    Serial.println("# STOP");
+  }
+  else if (cmd.length() > 0) {
+    Serial.print("# unknown command: ");
+    Serial.println(cmd);
+  }
+}
+
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) override {
-    Serial.println("*** Device Connected ***");
+    Serial.println("# device connected");
   }
   void onDisconnect(BLEServer* pServer) override {
-    Serial.println("*** device disconnected — restarting advertising ***");
+    Serial.println("# device disconnected, restarting advertising");
+    streamingEnabled = false;
     pServer->startAdvertising();
   }
 };
 
-// Command callback 
+// Command callback
 class CommandCallback : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) override {
     String value;
@@ -93,24 +123,7 @@ class CommandCallback : public BLECharacteristicCallbacks {
       value = pCharacteristic->getValue();
     #endif
 
-    value.trim();
-
-    if (value == "RESET") {
-      encoderOffset = readEncoderCount();
-      Serial.println("Received RESET command from web");
-    } 
-    else if (value == "START") {
-      streamingEnabled = true;
-      Serial.println("Received START command from web");
-    } 
-    else if (value == "STOP") {
-      streamingEnabled = false;
-      Serial.println("Received STOP command from web");
-    } 
-    else {
-      Serial.print("Unknown command: ");
-      Serial.println(value);
-    }
+    handleCommand(value);
   }
 };
 
@@ -118,17 +131,13 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  Serial.println("Initializing BLE...");
+  Serial.println("# initializing BLE");
   BLEDevice::init("ESP32 Rotary Motion Sensor V3");
-  // Added for stability 
-  esp_ble_conn_update_params_t conn_params = {0};
-  conn_params.min_int = 0x18;  // 30ms min interval (24 * 1.25ms)
-  conn_params.max_int = 0x30;  // 60ms max interval (48 * 1.25ms)
-  conn_params.latency = 0;     // No slave latency
-  conn_params.timeout = 800;   // 8s supervision timeout (800 * 10ms)
 
-  // update params after connection 
-  esp_ble_gap_update_conn_params(&conn_params);
+  // The JSON payload is ~55 bytes. The default 23 byte MTU leaves room for
+  // only 20 which would truncate every notification
+  BLEDevice::setMTU(185);
+
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
@@ -140,9 +149,9 @@ void setup() {
     BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ
   );
   if (pNotifyCharacteristic == nullptr) {
-    Serial.println("*** ERROR: Failed to create notify characteristic ***");
+    Serial.println("# ERROR: Failed to create notify characteristic");
   } else {
-    Serial.println("Notify characteristic created successfully");
+    Serial.println("# Notify characteristic created");
   }
   pNotifyCharacteristic->addDescriptor(new BLE2902());
 
@@ -152,9 +161,9 @@ void setup() {
     BLECharacteristic::PROPERTY_WRITE
   );
   if (pCommandCharacteristic == nullptr) {
-    Serial.println("*** ERROR: Failed to create command characteristic ***");
+    Serial.println("# ERROR: failed to create command characteristic");
   } else {
-    Serial.println("Command characteristic created successfully");
+    Serial.println("# command characteristic created");
   }
   pCommandCharacteristic->setCallbacks(new CommandCallback());
 
@@ -164,11 +173,10 @@ void setup() {
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
   pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
   pAdvertising->start();
 
-  Serial.println("BLE Advertising started");
-  Serial.println("Notify UUID: " + String(NOTIFY_CHARACTERISTIC));
-  Serial.println("Command UUID: " + String(COMMAND_CHARACTERISTIC));
+  Serial.println("# BLE advertising started");
 
   pinMode(PIN_A, INPUT_PULLUP);
   pinMode(PIN_B, INPUT_PULLUP);
@@ -179,14 +187,20 @@ void setup() {
   // Both pins, both edges
   attachInterrupt(digitalPinToInterrupt(PIN_A), encoderISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_B), encoderISR, CHANGE);
-  Serial.println("Encoder interrupts attached");
+  Serial.println("# encoder interrupts attached");
 
   // initialize timing 
   lastMicros = micros();
   lastCountForVel = readEncoderCount();
+
+  Serial.println("# ready, send START to begin streaming");
 }
 
 void loop() {
+  // Accept the same commands over USB serial as over BLE
+  if (Serial.available()) {
+    handleCommand(Serial.readStringUntil('\n'));
+  }
 
   // produce and send JSON when streaming enabled
   static unsigned long lastNotifyMs = 0;
@@ -214,13 +228,17 @@ void loop() {
     lastMicros = nowMicros;
     lastCountForVel = count;
 
-    // create JSON string
+    // Fixed buffer instead of String concatenation
     // include angle, angularVelocity (rad/s), count
-    String json = "{\"angle\":" + String(angle, 4) + ",\"angularVelocity\":" + String(angularVelocity, 4) + ",\"count\":" + String(adjustedCount) + "}";
-    pNotifyCharacteristic->setValue(json.c_str());
+    char json[96];
+    snprintf(json, sizeof(json),
+             "{\"angle\":%.4f,\"angularVelocity\":%.4f,\"count\":%ld}",
+             angle, angularVelocity, adjustedCount);
+
+    pNotifyCharacteristic->setValue((uint8_t*)json, strlen(json));
     pNotifyCharacteristic->notify();
 
-    // print to serial for debugging 
+    // same line over USB serial
     Serial.println(json);
   }
 
