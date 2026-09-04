@@ -33,9 +33,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const importCsvBtn                 = document.getElementById("importCsvButton");
     
     // Point selection 
-    const COLOR_ENDPOINT = 'red';
-    const COLOR_RANGE = '#ffcc00';     
-    const COLOR_NORMAL = null;
+    const COLOR_ENDPOINT = '#e03131';
+    const COLOR_RANGE    = '#ffcc00';
+    // Fully transparent rather than null
+    const COLOR_NORMAL   = 'rgba(0,0,0,0)';
+    const RADIUS_ENDPOINT = 6;
+    const RADIUS_RANGE    = 3;
+    const RADIUS_NORMAL   = 0;
+    const SHADE_FILL      = 'rgba(75, 192, 192, 0.25)';
 
     //misc
     let isDual          = false;
@@ -59,22 +64,6 @@ document.addEventListener("DOMContentLoaded", () => {
         Chart.register(window['chartjs-plugin-annotation']);
     }
 
-    // Smoothing default
-    let velocitySmoothingFactor = 0.18;  
-
-    // dropdown listener 
-    document.getElementById('velocitySmoothing')?.addEventListener('change', (e) => {
-        velocitySmoothingFactor = parseFloat(e.target.value);
-        const statusEl = document.getElementById('smoothingStatus');
-        if (statusEl) {
-            statusEl.textContent = velocitySmoothingFactor > 0 
-                ? `(active: ${velocitySmoothingFactor})` 
-                : '(disabled)';
-            statusEl.style.color = velocitySmoothingFactor > 0 ? '#2c7' : '#c44';
-        }
-        console.log(`Velocity smoothing changed to: ${velocitySmoothingFactor}`);
-    });
-
     // Create charts
     const chartAngle = new Chart(ctxAngle, {
         type: 'line',
@@ -85,26 +74,44 @@ document.addEventListener("DOMContentLoaded", () => {
                 data: [],
                 borderColor: 'rgb(75, 192, 192)',
                 tension: 0.1,
-                pointBackgroundColor: []
+                pointBackgroundColor: [],
+                pointBorderColor: [],
+                pointRadius: [],
+                // Click target is independent of the radius
+                pointHitRadius: 20
+            }, {
+                // Shading for area under the curve
+                label: '__area',
+                data: [],
+                borderWidth: 0,
+                pointRadius: 0,
+                fill: 'origin',
+                backgroundColor: SHADE_FILL,
+                tension: 0.1
             }]
         },
         options: {
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            plugins: {
+                legend: { labels: { filter: item => item.text !== '__area' } }
+            },
             scales: {
                 x: { title: { display: true, text: 'Time (s)' } },
                 y: { title: { display: true, text: POSITION_LABEL } }
             },
-            onClick: (event, elements) => {
-                if (elements.length === 0) return;
-                const idx = elements[0].index;
+            onClick: (event, elements, chart) => {
+                const hits = chart.getElementsAtEventForMode(
+                    event.native || event, 'nearest', { axis: 'x', intersect: false }, true);
+                if (hits.length === 0) return;
+                const idx = hits[0].index;
 
                 // Selection logic 
-                if (selectedPointsAngle.length < 2) {
-                    if (!selectedPointsAngle.includes(idx)) {
-                        selectedPointsAngle.push(idx);
-                    }
+                if (selectedPointsAngle.length >= 2 || selectedPointsAngle.includes(idx)) {
+                    selectedPointsAngle = [idx];   // start a fresh selection
                 } else {
-                    selectedPointsAngle = [idx];
+                    selectedPointsAngle.push(idx);
                 }
+                clearAreaShading(chartAngle);
 
                 updatePointHighlights(chartAngle, selectedPointsAngle);
                 updateCalculationResult(calculationResultAngleDiv, selectedPointsAngle, chartAngle, POSITION_LABEL);
@@ -121,26 +128,43 @@ document.addEventListener("DOMContentLoaded", () => {
                 data: [],
                 borderColor: 'rgb(153, 102, 255)',
                 tension: 0.1,
-                pointBackgroundColor: []
+                pointBackgroundColor: [],
+                pointBorderColor: [],
+                pointRadius: [],
+                // Click target is independent of the radius
+                pointHitRadius: 20
+            }, {
+                label: '__area',
+                data: [],
+                borderWidth: 0,
+                pointRadius: 0,
+                fill: 'origin',
+                backgroundColor: 'rgba(153, 102, 255, 0.25)',
+                tension: 0.1
             }]
         },
         options: {
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            plugins: {
+                legend: { labels: { filter: item => item.text !== '__area' } }
+            },
             scales: {
                 x: { title: { display: true, text: 'Time (s)' } },
                 y: { title: { display: true, text: VELOCITY_LABEL } }
             },
-            onClick: (event, elements) => {
-                if (elements.length === 0) return;
-                const idx = elements[0].index;
+            onClick: (event, elements, chart) => {
+                const hits = chart.getElementsAtEventForMode(
+                    event.native || event, 'nearest', { axis: 'x', intersect: false }, true);
+                if (hits.length === 0) return;
+                const idx = hits[0].index;
 
                 // Selection logic
-                if (selectedPointsVelocity.length < 2) {
-                    if (!selectedPointsVelocity.includes(idx)) {
-                        selectedPointsVelocity.push(idx);
-                    }
-                } else {
+                if (selectedPointsVelocity.length >= 2 || selectedPointsVelocity.includes(idx)) {
                     selectedPointsVelocity = [idx];
+                } else {
+                    selectedPointsVelocity.push(idx);
                 }
+                clearAreaShading(chartVelocity);
 
                 updatePointHighlights(chartVelocity, selectedPointsVelocity);
                 updateCalculationResult(calculationResultVelocityDiv, selectedPointsVelocity, chartVelocity, VELOCITY_LABEL);
@@ -161,8 +185,8 @@ document.addEventListener("DOMContentLoaded", () => {
         chartAngle.options.scales.y.title.text = POSITION_LABEL;
         chartVelocity.data.datasets[0].label = VELOCITY_LABEL;
         chartVelocity.options.scales.y.title.text = VELOCITY_LABEL;
-        chartAngle.update();
-        chartVelocity.update();
+        chartAngle.update('none');
+        chartVelocity.update('none');
     };
 
     // Add data to chart 
@@ -205,6 +229,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         allData.push({ time, position, velocity, count });
 
+        // A shaded span refers to fixed indices so drop it once new points arrives
+        if (chartAngle.data.datasets[1].data.length) clearAreaShading(chartAngle);
+        if (chartVelocity.data.datasets[1].data.length) clearAreaShading(chartVelocity);
+
         chartAngle.data.labels.push(time.toFixed(2));
         chartAngle.data.datasets[0].data.push(position);
         chartVelocity.data.labels.push(time.toFixed(2));
@@ -217,8 +245,8 @@ document.addEventListener("DOMContentLoaded", () => {
             updatePointHighlights(chartVelocity, selectedPointsVelocity);
         }
         
-        chartAngle.update();
-        chartVelocity.update();
+        chartAngle.update('none');
+        chartVelocity.update('none');
     };
 
     // Button listeners
@@ -247,12 +275,18 @@ document.addEventListener("DOMContentLoaded", () => {
         chartAngle.data.labels = [];
         chartAngle.data.datasets[0].data = [];
         chartAngle.data.datasets[0].pointBackgroundColor = [];
+        chartAngle.data.datasets[0].pointBorderColor = [];
+        chartAngle.data.datasets[0].pointRadius = [];
+        chartAngle.data.datasets[1].data = [];
         chartAngle.reset();
         chartAngle.update('none');
 
         chartVelocity.data.labels = [];
         chartVelocity.data.datasets[0].data = [];
         chartVelocity.data.datasets[0].pointBackgroundColor = [];
+        chartVelocity.data.datasets[0].pointBorderColor = [];
+        chartVelocity.data.datasets[0].pointRadius = [];
+        chartVelocity.data.datasets[1].data = [];
         chartVelocity.reset();
         chartVelocity.update('none');
 
@@ -308,41 +342,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (importCsvInput) importCsvInput.addEventListener("change", handleCsvImport);
     if (importCsvBtn)  importCsvBtn.addEventListener("click", () => importCsvInput.click());
 
-    document.getElementById('reapplySmoothing')?.addEventListener('click', () => {
-        if (allData.length < 2) {
-            alert("Need at least 2 points to apply smoothing.");
-            return;
-        }
-
-        // Re-compute smoothed velocities 
-        for (let i = 1; i < allData.length; i++) {
-            const current = allData[i];
-            const prev = allData[i - 1];
-            let smoothedV = current.velocity; // start with original
-
-            // Apply smoothing 
-            if (velocitySmoothingFactor > 0) {
-                smoothedV = velocitySmoothingFactor * current.velocity + 
-                            (1 - velocitySmoothingFactor) * prev.velocity;
-            }
-
-            // Update stored and plotted velocity
-            current.velocity = smoothedV;
-            chartVelocity.data.datasets[0].data[i] = smoothedV;
-        }
-
-        chartVelocity.update();
-        console.log("Re-applied velocity smoothing to existing data");
-        document.getElementById('smoothingStatus').textContent += ' (re-applied)';
-    });
-
-    // Calculation functions
     function calculateDeltaAngle() {
         if (selectedPointsAngle.length !== 2) {
             calculationResultAngleDiv.textContent = "Please select 2 points on the chart.";
             return;
         }
-        const [i1, i2] = selectedPointsAngle.sort((a,b)=>a-b);
+        const [i1, i2] = [...selectedPointsAngle].sort((a,b)=>a-b);
         const y1 = chartAngle.data.datasets[0].data[i1];
         const y2 = chartAngle.data.datasets[0].data[i2];
         const delta = y2 - y1;
@@ -357,7 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
             calculationResultVelocityDiv.textContent = "Please select 2 points on the chart.";
             return;
         }
-        const [i1, i2] = selectedPointsVelocity.sort((a,b)=>a-b);
+        const [i1, i2] = [...selectedPointsVelocity].sort((a,b)=>a-b);
         const y1 = chartVelocity.data.datasets[0].data[i1];
         const y2 = chartVelocity.data.datasets[0].data[i2];
         const delta = y2 - y1;
@@ -372,7 +377,7 @@ document.addEventListener("DOMContentLoaded", () => {
             calculationResultAngleDiv.textContent = "Please select 2 points on the chart.";
             return;
         }
-        const [i1, i2] = selectedPointsAngle.sort((a,b)=>a-b);
+        const [i1, i2] = [...selectedPointsAngle].sort((a,b)=>a-b);
         let area = 0;
         for (let i = i1; i < i2; i++) {
             const t1 = parseFloat(chartAngle.data.labels[i]);
@@ -382,6 +387,7 @@ document.addEventListener("DOMContentLoaded", () => {
             area += (y1 + y2) / 2 * (t2 - t1);
         }
         const unit = POSITION_LABEL.includes("mm") ? "mm" : "rad";
+        shadeArea(chartAngle, i1, i2);
         calculationResultAngleDiv.textContent = `Area ≈ ${area.toFixed(3)} ${unit}·s`;
     }
 
@@ -390,7 +396,7 @@ document.addEventListener("DOMContentLoaded", () => {
             calculationResultVelocityDiv.textContent = "Please select 2 points on the chart.";
             return;
         }
-        const [i1, i2] = selectedPointsVelocity.sort((a,b)=>a-b);
+        const [i1, i2] = [...selectedPointsVelocity].sort((a,b)=>a-b);
         let area = 0;
         for (let i = i1; i < i2; i++) {
             const t1 = parseFloat(chartVelocity.data.labels[i]);
@@ -400,6 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
             area += (y1 + y2) / 2 * (t2 - t1);
         }
         const unit = VELOCITY_LABEL.includes("mm") ? "mm" : "rad";
+        shadeArea(chartVelocity, i1, i2);
         calculationResultVelocityDiv.textContent = `Displacement = ${area.toFixed(3)} ${unit}`;
     }
 
@@ -420,6 +427,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 const count = parseInt(countStr || "0", 10);
                 if (!isNaN(time) && !isNaN(position) && !isNaN(velocity)) {
                     allData.push({ time, position, velocity, count });
+
+        // A shaded span refers to fixed indices so drop it once new points arrives
+        if (chartAngle.data.datasets[1].data.length) clearAreaShading(chartAngle);
+        if (chartVelocity.data.datasets[1].data.length) clearAreaShading(chartVelocity);
                 }
             });
             allData.sort((a,b) => a.time - b.time);
@@ -431,7 +442,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
             selectedPointsAngle = [];
             selectedPointsVelocity = [];
-            
+
+            clearAreaShading(chartAngle);
+            clearAreaShading(chartVelocity);
+
             // Clear all highlights
             updatePointHighlights(chartAngle, selectedPointsAngle);
             updatePointHighlights(chartVelocity, selectedPointsVelocity);
@@ -465,7 +479,10 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById('clearSelections')?.addEventListener('click', () => {
         selectedPointsAngle = [];
         selectedPointsVelocity = [];
-        
+
+        clearAreaShading(chartAngle);
+        clearAreaShading(chartVelocity);
+
         // clear all colors
         updatePointHighlights(chartAngle, selectedPointsAngle);
         updatePointHighlights(chartVelocity, selectedPointsVelocity);
@@ -484,35 +501,49 @@ function updatePointHighlights(chart, selectedIndices) {
     const numPoints = chart.data.labels.length;
     if (numPoints === 0) return;
 
-    const colors = new Array(numPoints).fill(COLOR_NORMAL);
+    const bg     = new Array(numPoints).fill(COLOR_NORMAL);
+    const border = new Array(numPoints).fill(COLOR_NORMAL);
+    const radius = new Array(numPoints).fill(RADIUS_NORMAL);
 
-    if (selectedIndices.length === 1) {
-        const idx = selectedIndices[0];
-        if (idx >= 0 && idx < numPoints) {
-            colors[idx] = COLOR_ENDPOINT;
-        }
-    }
+    const valid = selectedIndices.filter(i => i >= 0 && i < numPoints);
 
-    if (selectedIndices.length === 2) {
-        const start = Math.min(selectedIndices[0], selectedIndices[1]);
-        const end = Math.max(selectedIndices[0], selectedIndices[1]);
-
-        // Color both endpoints
-        if (start >= 0 && start < numPoints) {
-            colors[start] = COLOR_ENDPOINT;
-        }
-        if (end >= 0 && end < numPoints) {
-            colors[end] = COLOR_ENDPOINT;
-        }
-
-        // Colour all points between the points
+    if (valid.length === 2) {
+        const start = Math.min(valid[0], valid[1]);
+        const end   = Math.max(valid[0], valid[1]);
         for (let i = start + 1; i < end; i++) {
-            colors[i] = COLOR_RANGE;
+            bg[i] = COLOR_RANGE;
+            border[i] = COLOR_RANGE;
+            radius[i] = RADIUS_RANGE;
         }
     }
 
-    // Apply colours 
-    chart.data.datasets[0].pointBackgroundColor = colors;
+    // Endpoints drawn last so they always sit on top of the range colour.
+    valid.forEach(idx => {
+        bg[idx] = COLOR_ENDPOINT;
+        border[idx] = COLOR_ENDPOINT;
+        radius[idx] = RADIUS_ENDPOINT;
+    });
+
+    chart.data.datasets[0].pointBackgroundColor = bg;
+    chart.data.datasets[0].pointBorderColor = border;
+    chart.data.datasets[0].pointRadius = radius;
+    chart.update('none');
+}
+
+// Fills the region between two selected indices following the curve.
+function shadeArea(chart, i1, i2) {
+    const main = chart.data.datasets[0].data;
+    const shade = new Array(chart.data.labels.length).fill(null);
+    for (let i = i1; i <= i2; i++) {
+        shade[i] = main[i];
+    }
+    chart.data.datasets[1].data = shade;
+    chart.update('none');
+}
+
+function clearAreaShading(chart) {
+    if (!chart?.data?.datasets?.[1]) return;
+    chart.data.datasets[1].data = [];
     chart.update('none');
 }
 
