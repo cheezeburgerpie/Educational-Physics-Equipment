@@ -50,6 +50,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let allData         = [];
     let startTime       = null;
     let isStreaming     = false;
+    let lastSeq         = null;
+    let droppedSamples  = 0;
     
     // labels
     let POSITION_LABEL  = "Rotary Angle (radians)";
@@ -193,10 +195,24 @@ document.addEventListener("DOMContentLoaded", () => {
     window.addDataToChart = function(jsonObj) {
         if (!isStreaming) return;
 
-        const now = Date.now();
-        if (startTime === null) startTime = now;
+        // use the devices sample time
+        let time;
+        if (jsonObj.t !== undefined) {
+            time = jsonObj.t / 1000;
+        } else {
+            const now = Date.now();
+            if (startTime === null) startTime = now;
+            time = (now - startTime) / 1000;
+        }
 
-        const time = (now - startTime) / 1000; // time in seconds
+        // catch dropped notifications
+        if (jsonObj.n !== undefined) {
+            if (lastSeq !== null && jsonObj.n !== lastSeq + 1) {
+                droppedSamples += (jsonObj.n - lastSeq - 1);
+                console.warn(`Dropped ${jsonObj.n - lastSeq - 1} sample(s); ${droppedSamples} total`);
+            }
+            lastSeq = jsonObj.n;
+        }
 
         let position, velocity = 0, count = 0;
 
@@ -294,6 +310,8 @@ document.addEventListener("DOMContentLoaded", () => {
         selectedPointsAngle = [];
         selectedPointsVelocity = [];
         startTime = null;
+        lastSeq = null;
+        droppedSamples = 0;
         lastGoodPosition = 0;
         isStreaming = false;
         

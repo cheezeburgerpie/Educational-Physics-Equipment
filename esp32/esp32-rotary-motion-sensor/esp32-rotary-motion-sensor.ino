@@ -61,6 +61,51 @@ long readEncoderCount() {
 // start and stop boolean 
 bool streamingEnabled = false;
 
+// sampling cadence
+#define SAMPLE_MS 50
+unsigned long nextSampleMs = 0;
+unsigned long streamStartMs = 0;
+unsigned long sampleSeq = 0;
+
+// least squares slope over N samples reduces noise
+// by roughly sqrt(N) while staying responsive
+#define VEL_WINDOW 5
+long          velCounts[VEL_WINDOW];
+unsigned long velMicros[VEL_WINDOW];
+int velFill = 0;
+int velHead = 0;
+
+void velReset() {
+  velFill = 0;
+  velHead = 0;
+}
+
+void velPush(long count, unsigned long tMicros) {
+  velCounts[velHead] = count;
+  velMicros[velHead] = tMicros;
+  velHead = (velHead + 1) % VEL_WINDOW;
+  if (velFill < VEL_WINDOW) velFill++;
+}
+
+// Least squares slope of count against time in counts per second.
+float velSlope() {
+  if (velFill < 2) return 0.0f;
+
+  int oldest = (velHead - velFill + VEL_WINDOW) % VEL_WINDOW;
+  unsigned long t0 = velMicros[oldest];
+
+  double sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (int k = 0; k < velFill; k++) {
+    int i = (oldest + k) % VEL_WINDOW;
+    double x = (double)(velMicros[i] - t0) / 1000000.0; // seconds
+    double y = (double)velCounts[i];
+    sx += x; sy += y; sxx += x * x; sxy += x * y;
+  }
+  double denom = velFill * sxx - sx * sx;
+  if (denom == 0) return 0.0f;
+  return (float)((velFill * sxy - sx * sy) / denom);
+}
+
 // timing for velocity calculation
 unsigned long lastMicros = 0;
 long lastCountForVel = 0;
@@ -82,11 +127,16 @@ void handleCommand(String cmd) {
     encoderOffset = now;
     lastCountForVel = now;
     lastMicros = micros();
+    velReset();
     Serial.println("# RESET");
   }
   else if (cmd == "START") {
     lastCountForVel = readEncoderCount();
     lastMicros = micros();
+    velReset();
+    streamStartMs = millis();
+    nextSampleMs  = streamStartMs;
+    sampleSeq = 0;
     streamingEnabled = true;
     Serial.println("# START");
   }
@@ -203,42 +253,36 @@ void loop() {
   }
 
   // produce and send JSON when streaming enabled
-  static unsigned long lastNotifyMs = 0;
-  if (streamingEnabled && (millis() - lastNotifyMs) >= 50) { // 20 Hz
-    lastNotifyMs = millis();
+  // advance the deadline by exactly SAMPLE_MS 
+  if (streamingEnabled && (long)(millis() - nextSampleMs) >= 0) {
+    nextSampleMs += SAMPLE_MS;
+    // resynchronise if fallen behind 
+    if ((long)(millis() - nextSampleMs) > (long)(4 * SAMPLE_MS)) {
+      nextSampleMs = millis() + SAMPLE_MS;
+    }
 
-    // One snapshot per sample used for all three values below so
-    // they stay consistent with each other even if the ISR fires mid sample
+    unsigned long nowMicros = micros();
+    unsigned long tMs = millis() - streamStartMs;
+
+    // One snapshot per sample used for all values below so they stay
+    // consistent with each other even if the ISR fires mid sample
     long count = readEncoderCount();
 
-    // compute angle in radians
     long adjustedCount = count - encoderOffset;
     float angle = (float)adjustedCount * (2.0f * M_PI / COUNTS_PER_REV); // radians
 
-    // compute angular velocity (rad/s) using micros() delta
-    unsigned long nowMicros = micros();
-    unsigned long dtMicros = nowMicros - lastMicros;
-    float angularVelocity = 0.0f;
-    if (dtMicros > 0) {
-      long dCount = count - lastCountForVel;
-      float dAngle = (float)dCount * (2.0f * M_PI / COUNTS_PER_REV);
-      angularVelocity = dAngle / (dtMicros / 1000000.0f); // rads/s
-    }
-    // update baselines for next calc
-    lastMicros = nowMicros;
-    lastCountForVel = count;
+    // Fit velocity over the last VEL_WINDOW samples
+    velPush(count, nowMicros);
+    float angularVelocity = velSlope() * (2.0f * M_PI / COUNTS_PER_REV); // rad/s
 
-    // Fixed buffer instead of String concatenation
-    // include angle, angularVelocity (rad/s), count
-    char json[96];
+    char json[128];
     snprintf(json, sizeof(json),
-             "{\"angle\":%.4f,\"angularVelocity\":%.4f,\"count\":%ld}",
-             angle, angularVelocity, adjustedCount);
+             "{\"t\":%lu,\"n\":%lu,\"angle\":%.4f,\"angularVelocity\":%.4f,\"count\":%ld}",
+             tMs, sampleSeq++, angle, angularVelocity, adjustedCount);
 
     pNotifyCharacteristic->setValue((uint8_t*)json, strlen(json));
     pNotifyCharacteristic->notify();
 
-    // same line over USB serial
     Serial.println(json);
   }
 
